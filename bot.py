@@ -33,7 +33,7 @@ PAYMENT_NUMBER = os.getenv("PAYMENT_NUMBER", "").strip()
 PROFIT_MARGIN = float(os.getenv("PROFIT_MARGIN", "70") or 70)
 
 API_URL = "https://alkabos.com/api/v2"
-DB_FILE = "saqr_orders.db"
+DB_FILE = "/data/bot.db"
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set.")
