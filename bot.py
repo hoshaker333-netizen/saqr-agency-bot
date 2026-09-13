@@ -1,6 +1,11 @@
 import os
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+)
 
 TOKEN = os.getenv("BOT_TOKEN")
 
@@ -10,13 +15,18 @@ if not TOKEN:
 
 WELCOME = """🦅 أهلاً بك في SaQR Agency
 
-نقدم لك مجموعة متكاملة من الخدمات الرقمية والسوشيال ميديا.
+نقدم لك خدمات رقمية متكاملة:
+📱 سوشيال ميديا
+💻 اشتراكات برامج
+🎨 تصميم وجرافيك
+🌐 مواقع وبرمجة
+📢 إعلانات وتسويق
 
 اختر القسم الذي تريد معرفة خدماته 👇"""
 
 
 # =========================
-# القائمة الرئيسية
+# القوائم الرئيسية
 # =========================
 
 def main_menu():
@@ -32,48 +42,33 @@ def main_menu():
 
 
 # =========================
-# أزرار عامة
-# =========================
-
-def back_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📩 طلب الخدمة", callback_data="order")],
-        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")]
-    ])
-
-
-def only_back():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")]
-    ])
-
-
-# =========================
-# خدمات السوشيال ميديا
+# السوشيال ميديا
 # =========================
 
 def social_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("👥 متابعين", callback_data="followers")],
         [InlineKeyboardButton("❤️ لايكات", callback_data="likes")],
-        [InlineKeyboardButton("👁 مشاهدات", callback_data="views")],
+        [InlineKeyboardButton("👁️ مشاهدات", callback_data="views")],
         [InlineKeyboardButton("📈 ريتش وتفاعل", callback_data="reach")],
-        [InlineKeyboardButton("🔄 خدمات أخرى", callback_data="social_other")],
-        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")]
+        [InlineKeyboardButton("➕ خدمات أخرى", callback_data="social_other")],
+        [InlineKeyboardButton("🛒 طلب خدمة", callback_data="order")],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")],
     ])
 
 
 # =========================
-# اشتراكات البرامج
+# الاشتراكات
 # =========================
 
 def subscriptions_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎨 برامج التصميم", callback_data="design_apps")],
-        [InlineKeyboardButton("🤖 أدوات الذكاء الاصطناعي", callback_data="ai_apps")],
+        [InlineKeyboardButton("🤖 أدوات الذكاء الاصطناعي", callback_data="ai_tools")],
         [InlineKeyboardButton("🎬 برامج المونتاج", callback_data="editing_apps")],
-        [InlineKeyboardButton("💻 برامج وخدمات رقمية", callback_data="digital_apps")],
-        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")]
+        [InlineKeyboardButton("💻 خدمات رقمية", callback_data="digital_services")],
+        [InlineKeyboardButton("🛒 طلب اشتراك", callback_data="order")],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")],
     ])
 
 
@@ -83,12 +78,13 @@ def subscriptions_menu():
 
 def design_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📱 تصميم بوستات", callback_data="posts")],
-        [InlineKeyboardButton("🎯 تصميم لوجو", callback_data="logo")],
-        [InlineKeyboardButton("🏢 هوية بصرية", callback_data="branding")],
+        [InlineKeyboardButton("🖼️ تصميم بوستات", callback_data="posts")],
+        [InlineKeyboardButton("✨ تصميم لوجو", callback_data="logo")],
+        [InlineKeyboardButton("🎯 هوية بصرية", callback_data="branding")],
         [InlineKeyboardButton("📢 تصميم إعلانات", callback_data="ad_design")],
-        [InlineKeyboardButton("🖼 تصميمات السوشيال ميديا", callback_data="social_design")],
-        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")]
+        [InlineKeyboardButton("📱 تصميمات سوشيال ميديا", callback_data="social_design")],
+        [InlineKeyboardButton("🛒 طلب تصميم", callback_data="order")],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")],
     ])
 
 
@@ -98,11 +94,12 @@ def design_menu():
 
 def web_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌐 تصميم المواقع", callback_data="websites")],
-        [InlineKeyboardButton("🛒 المتاجر الإلكترونية", callback_data="stores")],
-        [InlineKeyboardButton("🤖 برمجة البوتات", callback_data="bots")],
-        [InlineKeyboardButton("⚙️ برمجة وتطوير", callback_data="development")],
-        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")]
+        [InlineKeyboardButton("🌐 تصميم مواقع", callback_data="websites")],
+        [InlineKeyboardButton("🛍️ متاجر إلكترونية", callback_data="stores")],
+        [InlineKeyboardButton("🤖 بوتات تيليجرام", callback_data="telegram_bots")],
+        [InlineKeyboardButton("💻 برمجة وتطوير", callback_data="development")],
+        [InlineKeyboardButton("🛒 طلب خدمة", callback_data="order")],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")],
     ])
 
 
@@ -112,16 +109,29 @@ def web_menu():
 
 def marketing_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 إعلانات ممولة", callback_data="ads")],
-        [InlineKeyboardButton("📱 إدارة صفحات السوشيال", callback_data="page_management")],
-        [InlineKeyboardButton("📈 زيادة الوصول والتفاعل", callback_data="growth")],
+        [InlineKeyboardButton("📣 الإعلانات الممولة", callback_data="paid_ads")],
+        [InlineKeyboardButton("📱 إدارة الصفحات", callback_data="page_management")],
+        [InlineKeyboardButton("📈 تنمية الحسابات", callback_data="growth")],
         [InlineKeyboardButton("🎯 التسويق الرقمي", callback_data="digital_marketing")],
-        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")]
+        [InlineKeyboardButton("🛒 طلب خدمة", callback_data="order")],
+        [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")],
     ])
 
 
 # =========================
-# أمر البداية
+# زر الرجوع
+# =========================
+
+def back_menu(callback_data="home"):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛒 طلب الخدمة", callback_data="order")],
+        [InlineKeyboardButton("🔙 رجوع", callback_data=callback_data)],
+        [InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="home")],
+    ])
+
+
+# =========================
+# /start
 # =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -135,18 +145,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # التعامل مع الأزرار
 # =========================
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
+async def button_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     query = update.callback_query
     await query.answer()
 
     data = query.data
 
-
-    # -------------------------
     # القائمة الرئيسية
-    # -------------------------
-
     if data == "home":
         await query.edit_message_text(
             WELCOME,
@@ -154,379 +162,308 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-
-    # -------------------------
-    # السوشيال ميديا
-    # -------------------------
+    # =====================
+    # الأقسام الرئيسية
+    # =====================
 
     if data == "social":
-        await query.edit_message_text(
-            """📱 خدمات السوشيال ميديا
+        text = """📱 خدمات السوشيال ميديا
 
-اختر الخدمة التي تريدها 👇""",
+نوفر خدمات متنوعة لمنصات التواصل الاجتماعي:
+
+👥 متابعين
+❤️ لايكات
+👁️ مشاهدات
+📈 ريتش وتفاعل
+➕ خدمات أخرى
+
+اختر الخدمة التي تريدها 👇"""
+
+        await query.edit_message_text(
+            text,
             reply_markup=social_menu()
         )
         return
 
-
-    if data == "followers":
-        text = """👥 خدمة المتابعين
-
-نوفر خدمات زيادة المتابعين لمختلف منصات التواصل الاجتماعي.
-
-📌 مناسبة للحسابات والصفحات المختلفة.
-
-📩 لمعرفة التفاصيل والأسعار اضغط طلب الخدمة."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "likes":
-        text = """❤️ خدمة اللايكات
-
-زيادة التفاعل على المنشورات والمحتوى الخاص بك.
-
-📩 لمعرفة التفاصيل والأسعار اضغط طلب الخدمة."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "views":
-        text = """👁 خدمة المشاهدات
-
-زيادة مشاهدات الفيديوهات والمحتوى على منصات التواصل.
-
-📩 لمعرفة التفاصيل والأسعار اضغط طلب الخدمة."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "reach":
-        text = """📈 الريتش والتفاعل
-
-خدمات تساعد على زيادة الوصول والتفاعل مع المحتوى.
-
-• وصول
-• تفاعل
-• مشاهدات
-• لايكات
-
-📩 لمعرفة التفاصيل والأسعار اضغط طلب الخدمة."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "social_other":
-        text = """🔄 خدمات السوشيال ميديا الأخرى
-
-نوفر خدمات متنوعة لمنصات التواصل الاجتماعي.
-
-إذا لم تجد الخدمة التي تبحث عنها، أرسل لنا تفاصيل طلبك وسيساعدك الدعم."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    # -------------------------
-    # الاشتراكات
-    # -------------------------
-
     if data == "subscriptions":
-        await query.edit_message_text(
-            """💻 اشتراكات البرامج والخدمات الرقمية
+        text = """💻 اشتراكات البرامج
 
-اختر نوع الاشتراك 👇""",
+نوفر اشتراكات وخدمات رقمية متنوعة:
+
+🎨 برامج التصميم
+🤖 أدوات الذكاء الاصطناعي
+🎬 برامج المونتاج
+💻 خدمات رقمية متنوعة
+
+اختر القسم الذي تريد معرفة تفاصيله 👇"""
+
+        await query.edit_message_text(
+            text,
             reply_markup=subscriptions_menu()
         )
         return
 
-
-    if data == "design_apps":
-        text = """🎨 برامج التصميم
-
-اشتراكات وخدمات للبرامج والأدوات الخاصة بالتصميم والجرافيك.
-
-📩 اضغط طلب الخدمة لمعرفة المتاح والأسعار."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "ai_apps":
-        text = """🤖 أدوات الذكاء الاصطناعي
-
-اشتراكات وخدمات خاصة بأدوات الذكاء الاصطناعي.
-
-📩 اضغط طلب الخدمة لمعرفة المتاح والأسعار."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "editing_apps":
-        text = """🎬 برامج المونتاج
-
-اشتراكات وخدمات لبرامج وأدوات المونتاج وصناعة المحتوى.
-
-📩 اضغط طلب الخدمة لمعرفة المتاح والأسعار."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "digital_apps":
-        text = """💻 الخدمات الرقمية
-
-مجموعة من الاشتراكات والأدوات والخدمات الرقمية.
-
-📩 اضغط طلب الخدمة لمعرفة المتاح والأسعار."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    # -------------------------
-    # التصميم
-    # -------------------------
-
     if data == "design":
-        await query.edit_message_text(
-            """🎨 التصميم والجرافيك
+        text = """🎨 التصميم والجرافيك
 
-اختر الخدمة التي تريدها 👇""",
+خدمات تصميم احترافية:
+
+🖼️ تصميم بوستات
+✨ تصميم لوجو
+🎯 هوية بصرية
+📢 تصميم إعلانات
+📱 تصميمات سوشيال ميديا
+
+اختر الخدمة التي تريدها 👇"""
+
+        await query.edit_message_text(
+            text,
             reply_markup=design_menu()
         )
         return
 
-
-    if data == "posts":
-        text = """📱 تصميم بوستات
-
-تصميم بوستات احترافية للسوشيال ميديا.
-
-مناسب لـ:
-• Instagram
-• Facebook
-• WhatsApp
-• وغيرها
-
-📩 اضغط طلب الخدمة."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "logo":
-        text = """🎯 تصميم لوجو
-
-تصميم شعار احترافي يناسب نشاطك أو البراند الخاص بك.
-
-📩 اضغط طلب الخدمة واذكر اسم النشاط وفكرة التصميم."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "branding":
-        text = """🏢 الهوية البصرية
-
-تصميم هوية متكاملة للبراند.
-
-• لوجو
-• ألوان
-• خطوط
-• تطبيقات الهوية
-• تصميمات متوافقة
-
-📩 اضغط طلب الخدمة."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "ad_design":
-        text = """📢 تصميم الإعلانات
-
-تصميم إعلانات احترافية للحملات والمنشورات.
-
-📩 اضغط طلب الخدمة وأرسل تفاصيل الإعلان."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "social_design":
-        text = """🖼 تصميمات السوشيال ميديا
-
-تصميم محتوى بصري احترافي للصفحات والحسابات.
-
-📩 اضغط طلب الخدمة."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    # -------------------------
-    # المواقع والبرمجة
-    # -------------------------
-
     if data == "web":
-        await query.edit_message_text(
-            """🌐 المواقع والبرمجة
+        text = """🌐 المواقع والبرمجة
 
-اختر الخدمة التي تريدها 👇""",
+خدمات الويب والبرمجة:
+
+🌐 تصميم مواقع
+🛍️ متاجر إلكترونية
+🤖 بوتات تيليجرام
+💻 برمجة وتطوير
+
+اختر الخدمة التي تريدها 👇"""
+
+        await query.edit_message_text(
+            text,
             reply_markup=web_menu()
         )
         return
 
-
-    if data == "websites":
-        text = """🌐 تصميم المواقع
-
-إنشاء وتصميم مواقع احترافية تناسب نشاطك.
-
-📩 اضغط طلب الخدمة وأرسل فكرة الموقع."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "stores":
-        text = """🛒 المتاجر الإلكترونية
-
-إنشاء وتطوير متاجر إلكترونية لبيع المنتجات والخدمات.
-
-📩 اضغط طلب الخدمة."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "bots":
-        text = """🤖 برمجة البوتات
-
-إنشاء وتطوير بوتات Telegram وخدمات الأتمتة.
-
-📩 اضغط طلب الخدمة وأرسل فكرة البوت."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "development":
-        text = """⚙️ البرمجة والتطوير
-
-تطوير وبرمجة حلول رقمية حسب احتياجات المشروع.
-
-📩 اضغط طلب الخدمة وأرسل تفاصيل المشروع."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    # -------------------------
-    # التسويق والإعلانات
-    # -------------------------
-
     if data == "marketing":
-        await query.edit_message_text(
-            """📢 الإعلانات والتسويق
+        text = """📢 الإعلانات والتسويق
 
-اختر الخدمة التي تريدها 👇""",
+خدمات التسويق الرقمي:
+
+📣 الإعلانات الممولة
+📱 إدارة الصفحات
+📈 تنمية الحسابات
+🎯 التسويق الرقمي
+
+اختر الخدمة التي تريدها 👇"""
+
+        await query.edit_message_text(
+            text,
             reply_markup=marketing_menu()
         )
         return
 
-
-    if data == "ads":
-        text = """📢 الإعلانات الممولة
-
-خدمات الإعلانات والحملات التسويقية على منصات التواصل.
-
-📩 اضغط طلب الخدمة وأرسل:
-• المنصة
-• الهدف
-• الميزانية التقريبية"""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "page_management":
-        text = """📱 إدارة صفحات السوشيال ميديا
-
-إدارة وتنظيم محتوى الصفحات والحسابات.
-
-📩 اضغط طلب الخدمة لمعرفة التفاصيل."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "growth":
-        text = """📈 زيادة الوصول والتفاعل
-
-حلول لتحسين الوصول والتفاعل مع المحتوى.
-
-📩 اضغط طلب الخدمة لمعرفة التفاصيل."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    if data == "digital_marketing":
-        text = """🎯 التسويق الرقمي
-
-خدمات وحلول تسويقية تساعد على تطوير حضور البراند الرقمي.
-
-📩 اضغط طلب الخدمة."""
-        await query.edit_message_text(text, reply_markup=back_menu())
-        return
-
-
-    # -------------------------
-    # الأسعار
-    # -------------------------
-
     if data == "prices":
         text = """💰 الأسعار والعروض
 
-أسعار الخدمات تختلف حسب نوع الخدمة والكمية والمنصة والمواصفات المطلوبة.
+الأسعار تختلف حسب نوع الخدمة والكمية والمنصة.
 
-📩 للحصول على السعر الحالي:
-اضغط «طلب الخدمة» وأرسل الخدمة التي تريدها بالتحديد.
+📌 للحصول على السعر الحالي:
+اضغط على «🛒 طلب الخدمة» وأرسل تفاصيل طلبك.
 
-سنرسل لك التفاصيل والسعر المناسب."""
-        await query.edit_message_text(text, reply_markup=back_menu())
+سنحدد لك الخدمة والسعر المناسب."""
+
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛒 طلب خدمة", callback_data="order")],
+                [InlineKeyboardButton("📞 التواصل مع الدعم", callback_data="support")],
+                [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")],
+            ])
+        )
         return
-
-
-    # -------------------------
-    # الدعم
-    # -------------------------
 
     if data == "support":
         text = """📞 التواصل مع الدعم
 
-للتواصل مع فريق SaQR Agency:
+للطلب أو الاستفسار أرسل لنا:
 
-أرسل في رسالة واحدة:
 • اسم الخدمة
 • المنصة
-• الكمية المطلوبة
-• أي تفاصيل إضافية
+• الكمية أو التفاصيل المطلوبة
+• أي ملاحظات إضافية
 
-وسيتم مساعدتك في إتمام الطلب."""
-        await query.edit_message_text(text, reply_markup=back_menu())
+وسنساعدك في إتمام طلبك."""
+
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛒 طلب خدمة", callback_data="order")],
+                [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="home")],
+            ])
+        )
         return
 
+    # =====================
+    # خدمات السوشيال
+    # =====================
 
-    # -------------------------
+    social_services = {
+        "followers": """👥 المتابعين
+
+خدمة زيادة المتابعين للحسابات والمنصات المختلفة.
+
+📌 اختر «طلب خدمة» لإرسال المنصة والكمية المطلوبة.""",
+
+        "likes": """❤️ اللايكات
+
+خدمة زيادة الإعجابات والتفاعل على المحتوى.
+
+📌 اختر «طلب خدمة» لإرسال المنصة والرابط والكمية.""",
+
+        "views": """👁️ المشاهدات
+
+خدمة زيادة المشاهدات للمحتوى على المنصات المختلفة.
+
+📌 اختر «طلب خدمة» لإرسال الرابط والكمية المطلوبة.""",
+
+        "reach": """📈 الريتش والتفاعل
+
+خدمات خاصة بزيادة الوصول والتفاعل حسب نوع المنصة والحملة.
+
+📌 اختر «طلب خدمة» لإرسال التفاصيل.""",
+
+        "social_other": """➕ خدمات أخرى
+
+إذا لم تجد الخدمة التي تبحث عنها، أرسل تفاصيل طلبك وسنساعدك في تحديد الخدمة المناسبة."""
+    }
+
+    if data in social_services:
+        await query.edit_message_text(
+            social_services[data],
+            reply_markup=back_menu("social")
+        )
+        return
+
+    # =====================
+    # الاشتراكات
+    # =====================
+
+    subscription_services = {
+        "design_apps": """🎨 برامج التصميم
+
+اشتراكات وخدمات متعلقة ببرامج التصميم والجرافيك.
+
+📌 لمعرفة المتاح والسعر الحالي أرسل اسم البرنامج.""",
+
+        "ai_tools": """🤖 أدوات الذكاء الاصطناعي
+
+اشتراكات وخدمات لأدوات الذكاء الاصطناعي المختلفة.
+
+📌 أرسل اسم الأداة التي تريدها لمعرفة المتاح والسعر.""",
+
+        "editing_apps": """🎬 برامج المونتاج
+
+اشتراكات وخدمات لبرامج المونتاج وتحرير الفيديو.
+
+📌 أرسل اسم البرنامج المطلوب.""",
+
+        "digital_services": """💻 خدمات رقمية
+
+خدمات رقمية متنوعة حسب احتياجك.
+
+📌 أرسل تفاصيل الخدمة المطلوبة وسنساعدك."""
+    }
+
+    if data in subscription_services:
+        await query.edit_message_text(
+            subscription_services[data],
+            reply_markup=back_menu("subscriptions")
+        )
+        return
+
+    # =====================
+    # التصميم
+    # =====================
+
+    design_services = {
+        "posts": "🖼️ تصميم بوستات\n\nتصميم بوستات احترافية للسوشيال ميديا حسب الهوية والمحتوى المطلوب.",
+        "logo": "✨ تصميم لوجو\n\nتصميم شعار احترافي مناسب للعلامة التجارية والاستخدامات المختلفة.",
+        "branding": "🎯 الهوية البصرية\n\nتصميم هوية بصرية متكاملة للعلامة التجارية.",
+        "ad_design": "📢 تصميم إعلانات\n\nتصميم إعلانات ومواد بصرية للحملات التسويقية.",
+        "social_design": "📱 تصميمات سوشيال ميديا\n\nتصميم محتوى بصري مناسب لمنصات التواصل الاجتماعي."
+    }
+
+    if data in design_services:
+        await query.edit_message_text(
+            design_services[data],
+            reply_markup=back_menu("design")
+        )
+        return
+
+    # =====================
+    # المواقع والبرمجة
+    # =====================
+
+    web_services = {
+        "websites": "🌐 تصميم مواقع\n\nإنشاء وتصميم مواقع احترافية حسب احتياجات المشروع.",
+        "stores": "🛍️ المتاجر الإلكترونية\n\nتصميم وتطوير متاجر إلكترونية لبيع المنتجات والخدمات.",
+        "telegram_bots": "🤖 بوتات تيليجرام\n\nإنشاء وتطوير بوتات تيليجرام حسب فكرة المشروع.",
+        "development": "💻 البرمجة والتطوير\n\nخدمات برمجة وتطوير حسب متطلبات المشروع."
+    }
+
+    if data in web_services:
+        await query.edit_message_text(
+            web_services[data],
+            reply_markup=back_menu("web")
+        )
+        return
+
+    # =====================
+    # التسويق
+    # =====================
+
+    marketing_services = {
+        "paid_ads": "📣 الإعلانات الممولة\n\nإعداد وإدارة الحملات الإعلانية حسب الهدف والمنصة.",
+        "page_management": "📱 إدارة الصفحات\n\nخدمات إدارة وتنظيم محتوى صفحات التواصل الاجتماعي.",
+        "growth": "📈 تنمية الحسابات\n\nخطط وخدمات تساعد على تطوير ونمو الحسابات.",
+        "digital_marketing": "🎯 التسويق الرقمي\n\nحلول تسويقية رقمية حسب نشاط المشروع والهدف."
+    }
+
+    if data in marketing_services:
+        await query.edit_message_text(
+            marketing_services[data],
+            reply_markup=back_menu("marketing")
+        )
+        return
+
+    # =====================
     # طلب الخدمة
-    # -------------------------
+    # =====================
 
     if data == "order":
-        text = """📩 طلب خدمة
+        text = """🛒 طلب خدمة
 
-أرسل لنا الآن:
+أرسل لنا رسالة تحتوي على:
 
 1️⃣ اسم الخدمة
-2️⃣ المنصة المطلوبة
-3️⃣ الكمية أو التفاصيل
-4️⃣ أي ملاحظات إضافية
+2️⃣ المنصة
+3️⃣ الرابط إن وجد
+4️⃣ الكمية أو المدة
+5️⃣ أي تفاصيل أو ملاحظات
 
 مثال:
 
 الخدمة: متابعين
 المنصة: Instagram
 الكمية: 10,000
-التفاصيل: أريد معرفة السعر
+الرابط: ...
+ملاحظات: ...
 
-وسيتم الرد عليك من فريق الدعم."""
-        await query.edit_message_text(text, reply_markup=only_back())
+📩 أرسل التفاصيل وسنقوم بمساعدتك."""
+
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📞 الدعم", callback_data="support")],
+                [InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="home")],
+            ])
+        )
         return
 
 
