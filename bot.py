@@ -1,12 +1,16 @@
 import os
-import json
 import sqlite3
 import asyncio
+import json
 import urllib.parse
 import urllib.request
 from datetime import datetime
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -18,22 +22,45 @@ from telegram.ext import (
 
 
 # =========================================================
-# SaQR Agency
+# CONFIG
 # =========================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+
 ALKABOS_API_KEY = os.getenv("ALKABOS_API_KEY", "").strip()
+XPRO_API_KEY = os.getenv("XPRO_API_KEY", "").strip()
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or 0)
 
-PAYMENT_NAME = os.getenv("PAYMENT_NAME", "Hosam Shaker").strip()
-PAYMENT_METHOD = os.getenv("PAYMENT_METHOD", "Vodafone Cash").strip()
-PAYMENT_NUMBER = os.getenv("PAYMENT_NUMBER", "").strip()
+PAYMENT_NAME = os.getenv(
+    "PAYMENT_NAME",
+    "Hosam Shaker"
+).strip()
 
-PROFIT_MARGIN = float(os.getenv("PROFIT_MARGIN", "70") or 70)
+PAYMENT_METHOD = os.getenv(
+    "PAYMENT_METHOD",
+    "Vodafone Cash"
+).strip()
 
-API_URL = "https://alkabos.com/api/v2"
+PAYMENT_NUMBER = os.getenv(
+    "PAYMENT_NUMBER",
+    ""
+).strip()
+
+PROFIT_MARGIN = float(
+    os.getenv("PROFIT_MARGIN", "70") or 70
+)
+
+ALKABOS_API_URL = "https://alkabos.com/api/v2"
+XPRO_API_URL = "https://xprostore.store/api/v1"
+
+# Persistent Deployka storage
 DB_FILE = "/data/bot.db"
+
+# Fallback only.
+# The bot will try to fetch the current rate automatically.
+FALLBACK_USD_EGP = 51.36
+
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set.")
@@ -49,35 +76,33 @@ if not ADMIN_ID:
 # DATABASE
 # =========================================================
 
-def get_db():
+def db():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db():
-    conn = get_db()
+    conn = db()
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            username TEXT DEFAULT '',
-            service_id TEXT NOT NULL,
-            service_name TEXT NOT NULL,
-            service_type TEXT DEFAULT '',
-            category TEXT DEFAULT '',
-            link TEXT DEFAULT '',
-            quantity INTEGER DEFAULT 0,
-            extra TEXT DEFAULT '',
-            cost REAL DEFAULT 0,
-            sale_price REAL DEFAULT 0,
-            payment_status TEXT DEFAULT 'waiting',
-            order_status TEXT DEFAULT 'waiting_payment',
-            alkabos_order_id TEXT DEFAULT '',
-            proof_file_id TEXT DEFAULT '',
-            provider_status TEXT DEFAULT '',
-            created_at TEXT NOT NULL
+            user_id INTEGER,
+            username TEXT,
+            provider TEXT,
+            service_id TEXT,
+            service_name TEXT,
+            category TEXT,
+            link TEXT,
+            quantity INTEGER,
+            cost REAL,
+            sale_price REAL,
+            payment_status TEXT,
+            order_status TEXT,
+            provider_order_id TEXT,
+            proof_file_id TEXT,
+            created_at TEXT
         )
     """)
 
@@ -86,186 +111,443 @@ def init_db():
 
 
 # =========================================================
-# ALKABOS API
+# HTTP
 # =========================================================
 
-def alkabos_request(action, params=None):
-    data = {
+def http_post_form(url, params, headers=None):
+    data = urllib.parse.urlencode(params).encode("utf-8")
+
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers=headers or {}
+    )
+
+    with urllib.request.urlopen(
+        request,
+        timeout=30
+    ) as response:
+        return response.read().decode("utf-8")
+
+
+def http_get(url, headers=None):
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers=headers or {}
+    )
+
+    with urllib.request.urlopen(
+        request,
+        timeout=30
+    ) as response:
+        return response.read().decode("utf-8")
+
+
+# =========================================================
+# ALKABOS
+# =========================================================
+
+async def alkabos_request(action, extra=None):
+
+    params = {
         "key": ALKABOS_API_KEY,
         "action": action,
     }
 
-    if params:
-        data.update(params)
-
-    body = urllib.parse.urlencode(data).encode("utf-8")
-
-    request = urllib.request.Request(
-        API_URL,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "SaQR-Agency-Bot/1.0",
-        },
-    )
-
-    with urllib.request.urlopen(request, timeout=35) as response:
-        raw = response.read().decode("utf-8")
-
-    return json.loads(raw)
-
-
-async def api_request(action, params=None):
-    return await asyncio.to_thread(
-        alkabos_request,
-        action,
-        params
-    )
-
-
-SERVICES = []
-
-
-async def refresh_services():
-    global SERVICES
+    if extra:
+        params.update(extra)
 
     try:
-        result = await api_request("services")
+        raw = await asyncio.to_thread(
+            http_post_form,
+            ALKABOS_API_URL,
+            params,
+            {
+                "Content-Type":
+                    "application/x-www-form-urlencoded",
+                "User-Agent":
+                    "SaQR-Agency-Bot/2.0",
+            }
+        )
 
-        if isinstance(result, list):
-            SERVICES = result
-            print(f"Loaded {len(SERVICES)} services.")
-            return SERVICES
+        return json.loads(raw)
 
-        print("Invalid services response:", result)
-
-    except Exception as error:
-        print("Services API error:", repr(error))
-
-    return SERVICES
+    except Exception as e:
+        print("Alkabos error:", e)
+        return None
 
 
-async def add_alkabos_order(service, link, quantity, extra=""):
-    service_type = str(
-        service.get("type", "")
-    ).lower()
+async def get_alkabos_services():
 
-    params = {
-        "service": str(service["service"]),
-        "link": link,
-    }
+    result = await alkabos_request("services")
 
-    if quantity > 0:
-        params["quantity"] = str(quantity)
+    if isinstance(result, list):
+        return result
 
-    # Custom comments
-    if "comment" in service_type and extra:
-        params["comments"] = extra
+    return []
 
-    # Username-based services
-    if "username" in service_type and extra:
-        params["usernames"] = extra
 
-    return await api_request("add", params)
+async def create_alkabos_order(
+    service_id,
+    link,
+    quantity
+):
+
+    return await alkabos_request(
+        "add",
+        {
+            "service": service_id,
+            "link": link,
+            "quantity": quantity,
+        }
+    )
 
 
 async def get_alkabos_status(order_id):
-    return await api_request(
+
+    return await alkabos_request(
         "status",
         {
-            "order": str(order_id)
+            "order": order_id
         }
     )
 
 
 async def get_alkabos_balance():
-    return await api_request("balance")
+
+    return await alkabos_request("balance")
 
 
 # =========================================================
-# PRICING
+# USD -> EGP
 # =========================================================
 
-def calculate_price(service, quantity):
-    rate = float(
-        service.get("rate", 0) or 0
+async def get_usd_egp_rate():
+
+    urls = [
+        "https://api.frankfurter.dev/v2/"
+        "providers/cbe/rate/usd/egp",
+
+        "https://api.frankfurter.dev/v2/"
+        "rate/usd/egp",
+    ]
+
+    for url in urls:
+
+        try:
+
+            raw = await asyncio.to_thread(
+                http_get,
+                url
+            )
+
+            data = json.loads(raw)
+
+            rate = data.get("rate")
+
+            if rate:
+                return float(rate)
+
+        except Exception as e:
+            print("Exchange rate error:", e)
+
+    return FALLBACK_USD_EGP
+
+
+async def calculate_price(
+    provider_rate,
+    quantity
+):
+
+    usd_egp = await get_usd_egp_rate()
+
+    provider_cost_egp = (
+        float(provider_rate)
+        * int(quantity)
+        / 1000
+        * usd_egp
     )
 
-    if quantity > 0:
-        cost = rate * quantity / 1000
-    else:
-        cost = rate
-
-    sale = cost * (
-        1 + PROFIT_MARGIN / 100
+    sale_price = (
+        provider_cost_egp
+        * (1 + PROFIT_MARGIN / 100)
     )
 
-    return round(cost, 2), round(sale, 2)
-
-
-def money(value):
-    return f"{float(value):,.2f} جنيه"
+    return (
+        round(provider_cost_egp, 2),
+        round(sale_price, 2),
+        round(usd_egp, 4)
+    )
 
 
 # =========================================================
-# DATABASE ORDER
+# X PRO STORE
 # =========================================================
 
-def create_order(user, data, proof_file_id):
-    service = data["service"]
+async def xpro_request(
+    method,
+    endpoint,
+    payload=None
+):
 
-    conn = get_db()
+    if not XPRO_API_KEY:
+        return None
 
-    cursor = conn.execute("""
-        INSERT INTO orders (
-            user_id,
-            username,
-            service_id,
-            service_name,
-            service_type,
-            category,
-            link,
-            quantity,
-            extra,
-            cost,
-            sale_price,
-            payment_status,
-            order_status,
-            alkabos_order_id,
-            proof_file_id,
-            provider_status,
-            created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        user.id,
-        user.username or "",
-        str(service["service"]),
-        service.get("name", "Service"),
-        service.get("type", ""),
-        service.get("category", ""),
-        data.get("link", ""),
-        int(data.get("quantity", 0)),
-        data.get("extra", ""),
-        float(data.get("cost", 0)),
-        float(data.get("sale_price", 0)),
-        "waiting",
-        "waiting_payment",
-        "",
-        proof_file_id,
-        "",
-        datetime.now().isoformat(
-            timespec="seconds"
-        ),
-    ))
+    url = XPRO_API_URL + endpoint
 
-    order_id = cursor.lastrowid
+    headers = {
+        "Authorization":
+            f"Bearer {XPRO_API_KEY}",
+        "Content-Type":
+            "application/json",
+        "User-Agent":
+            "SaQR-Agency-Bot/2.0",
+    }
 
-    conn.commit()
-    conn.close()
+    try:
 
-    return order_id
+        if method == "GET":
+
+            raw = await asyncio.to_thread(
+                http_get,
+                url,
+                headers
+            )
+
+        else:
+
+            data = json.dumps(
+                payload or {}
+            ).encode("utf-8")
+
+            request = urllib.request.Request(
+                url,
+                data=data,
+                method=method,
+                headers=headers
+            )
+
+            raw = await asyncio.to_thread(
+                lambda: urllib.request.urlopen(
+                    request,
+                    timeout=30
+                ).read().decode("utf-8")
+            )
+
+        return json.loads(raw)
+
+    except Exception as e:
+        print("XPro error:", e)
+        return None
+
+
+async def get_xpro_services():
+
+    result = await xpro_request(
+        "GET",
+        "/services"
+    )
+
+    if isinstance(result, list):
+        return result
+
+    if isinstance(result, dict):
+
+        for key in (
+            "services",
+            "data",
+            "results"
+        ):
+
+            if isinstance(
+                result.get(key),
+                list
+            ):
+                return result[key]
+
+    return []
+
+
+async def create_xpro_order(
+    service_id,
+    quantity
+):
+
+    return await xpro_request(
+        "POST",
+        "/orders",
+        {
+            "service_id": str(service_id),
+            "quantity": int(quantity),
+        }
+    )
+
+
+# =========================================================
+# CUSTOMER CATALOG
+# =========================================================
+
+# ---------------------------------------------------------
+# SOCIAL MEDIA
+#
+# هنا نربط اسم SaQR بالـAlkabos service ID.
+#
+# service_id = رقم الخدمة عند Alkabos
+# name       = الاسم الذي يراه العميل
+# description= الوصف الذي يراه العميل
+# ---------------------------------------------------------
+
+SOCIAL_CATALOG = {
+
+    "instagram": {
+        "title": "📸 Instagram",
+        "services": []
+    },
+
+    "tiktok": {
+        "title": "🎵 TikTok",
+        "services": []
+    },
+
+    "facebook": {
+        "title": "🔵 Facebook",
+        "services": []
+    },
+
+    "youtube": {
+        "title": "▶️ YouTube",
+        "services": []
+    },
+
+    "telegram": {
+        "title": "✈️ Telegram",
+        "services": []
+    },
+
+    "whatsapp": {
+        "title": "🟢 WhatsApp",
+        "services": []
+    },
+
+    "x": {
+        "title": "𝕏 X / Twitter",
+        "services": []
+    },
+
+    "snapchat": {
+        "title": "👻 Snapchat",
+        "services": []
+    },
+
+    "twitch": {
+        "title": "🎮 Twitch",
+        "services": []
+    },
+
+    "linkedin": {
+        "title": "💼 LinkedIn",
+        "services": []
+    },
+
+    "websites": {
+        "title": "🌐 المواقع والمتاجر",
+        "services": []
+    },
+
+    "marketing": {
+        "title": "📢 التسويق والإعلانات",
+        "services": []
+    },
+}
+
+
+# ---------------------------------------------------------
+# PROGRAMS
+#
+# X Pro Store service IDs are kept here.
+# Customer sees only SaQR names.
+# ---------------------------------------------------------
+
+PROGRAM_CATALOG = {
+
+    "ai": {
+        "title": "🤖 الذكاء الاصطناعي",
+        "services": []
+    },
+
+    "video": {
+        "title": "🎬 المونتاج والفيديو",
+        "services": []
+    },
+
+    "design": {
+        "title": "🎨 التصميم والجرافيك",
+        "services": []
+    },
+
+    "audio": {
+        "title": "🎵 الصوت والموسيقى",
+        "services": []
+    },
+
+    "productivity": {
+        "title": "📝 الإنتاجية والعمل",
+        "services": []
+    },
+
+    "education": {
+        "title": "📚 التعليم والكورسات",
+        "services": []
+    },
+
+    "vpn": {
+        "title": "🔐 VPN والأمان",
+        "services": []
+    },
+
+    "entertainment": {
+        "title": "🎞️ الترفيه والمنصات",
+        "services": []
+    },
+
+    "tools": {
+        "title": "🧰 أدوات وخدمات متنوعة",
+        "services": []
+    },
+}
+
+
+# =========================================================
+# EXAMPLE SERVICE STRUCTURE
+# =========================================================
+
+"""
+مثال:
+
+SOCIAL_CATALOG["facebook"]["services"] = [
+    {
+        "service_id": "3400",
+        "name": "ريأكت فيسبوك مصريين",
+        "description": "تفاعل على منشورات فيسبوك...",
+    }
+]
+
+PROGRAM_CATALOG["ai"]["services"] = [
+    {
+        "service_id": "13",
+        "name": "ChatGPT Plus",
+        "description": "اشتراك ChatGPT...",
+        "price": 150,
+        "quantity": 1,
+        "provider": "xpro"
+    }
+]
+
+سنملأ هذه القائمة بعد الحصول على الخدمات
+الفعلية من الموردين.
+"""
 
 
 # =========================================================
@@ -274,28 +556,39 @@ def create_order(user, data, proof_file_id):
 
 WELCOME = """🦅 أهلاً بك في SaQR Agency
 
-متجر الخدمات الرقمية
+متجر الخدمات الرقمية الخاص بك.
 
-اختر ما تريد من القائمة 👇"""
+اختر القسم الذي تريد الدخول إليه 👇"""
 
 
 def main_menu():
+
     return InlineKeyboardMarkup([
+
         [
             InlineKeyboardButton(
-                "📱 جميع خدمات السوشيال ميديا",
-                callback_data="categories:0"
+                "💻 البرامج والاشتراكات",
+                callback_data="programs"
             )
         ],
+
+        [
+            InlineKeyboardButton(
+                "📱 السوشيال ميديا والماركتينج",
+                callback_data="social"
+            )
+        ],
+
         [
             InlineKeyboardButton(
                 "📦 طلباتي",
-                callback_data="orders"
+                callback_data="my_orders"
             )
         ],
+
         [
             InlineKeyboardButton(
-                "📞 الدعم",
+                "🎧 الدعم",
                 callback_data="support"
             )
         ],
@@ -303,74 +596,24 @@ def main_menu():
 
 
 # =========================================================
-# CATEGORIES
+# CATEGORY MENUS
 # =========================================================
 
-def get_categories():
-    categories = []
-
-    for service in SERVICES:
-
-        category = str(
-            service.get(
-                "category",
-                "خدمات أخرى"
-            )
-        ).strip()
-
-        if category not in categories:
-            categories.append(category)
-
-    return categories
-
-
-def category_keyboard(page=0):
-    categories = get_categories()
-
-    per_page = 8
-
-    start = page * per_page
-    end = start + per_page
+def catalog_keyboard(
+    catalog,
+    prefix
+):
 
     buttons = []
 
-    for index in range(
-        start,
-        min(end, len(categories))
-    ):
-
-        name = categories[index]
-
-        if len(name) > 45:
-            name = name[:42] + "..."
+    for key, category in catalog.items():
 
         buttons.append([
             InlineKeyboardButton(
-                f"📁 {name}",
-                callback_data=f"category:{index}:0"
+                category["title"],
+                callback_data=f"{prefix}:{key}"
             )
         ])
-
-    navigation = []
-
-    if page > 0:
-        navigation.append(
-            InlineKeyboardButton(
-                "⬅️ السابق",
-                callback_data=f"categories:{page - 1}"
-            )
-        )
-
-    if end < len(categories):
-        navigation.append(
-            InlineKeyboardButton(
-                "التالي ➡️",
-                callback_data=f"categories:{page + 1}"
-            )
-        )
-
-    if navigation:
-        buttons.append(navigation)
 
     buttons.append([
         InlineKeyboardButton(
@@ -383,111 +626,234 @@ def category_keyboard(page=0):
 
 
 # =========================================================
-# SERVICES
+# PROGRAM SERVICES
 # =========================================================
 
-def get_category_services(category_index):
-    categories = get_categories()
-
-    if category_index >= len(categories):
-        return None, []
-
-    category = categories[category_index]
-
-    services = [
-        service
-        for service in SERVICES
-        if str(
-            service.get(
-                "category",
-                "خدمات أخرى"
-            )
-        ).strip() == category
-    ]
-
-    return category, services
-
-
-def services_keyboard(
-    category_index,
-    page=0
+def program_services_keyboard(
+    category_key
 ):
 
-    category, services = get_category_services(
-        category_index
+    category = PROGRAM_CATALOG.get(
+        category_key
     )
 
-    if category is None:
-        return category_keyboard()
-
-    per_page = 8
-
-    start = page * per_page
-    end = start + per_page
+    if not category:
+        return catalog_keyboard(
+            PROGRAM_CATALOG,
+            "programcat"
+        )
 
     buttons = []
 
-    for service in services[start:end]:
-
-        service_id = str(
-            service.get("service")
-        )
-
-        name = str(
-            service.get(
-                "name",
-                f"Service {service_id}"
-            )
-        )
-
-        if len(name) > 45:
-            name = name[:42] + "..."
+    for index, service in enumerate(
+        category["services"]
+    ):
 
         buttons.append([
             InlineKeyboardButton(
-                f"🛒 {name}",
-                callback_data=f"service:{service_id}"
+                f"🛒 {service['name']}",
+                callback_data=
+                f"programservice:{category_key}:{index}"
             )
         ])
 
-    navigation = []
-
-    if page > 0:
-        navigation.append(
-            InlineKeyboardButton(
-                "⬅️ السابق",
-                callback_data=(
-                    f"category:{category_index}:{page - 1}"
-                )
-            )
-        )
-
-    if end < len(services):
-        navigation.append(
-            InlineKeyboardButton(
-                "التالي ➡️",
-                callback_data=(
-                    f"category:{category_index}:{page + 1}"
-                )
-            )
-        )
-
-    if navigation:
-        buttons.append(navigation)
-
     buttons.append([
         InlineKeyboardButton(
-            "🔙 الأقسام",
-            callback_data="categories:0"
+            "🔙 التصنيفات",
+            callback_data="programs"
         )
     ])
 
     return InlineKeyboardMarkup(buttons)
 
 
-def find_service(service_id):
+# =========================================================
+# SOCIAL SERVICES
+# =========================================================
 
-    for service in SERVICES:
+def social_services_keyboard(
+    category_key
+):
+
+    category = SOCIAL_CATALOG.get(
+        category_key
+    )
+
+    if not category:
+        return catalog_keyboard(
+            SOCIAL_CATALOG,
+            "socialcat"
+        )
+
+    buttons = []
+
+    for index, service in enumerate(
+        category["services"]
+    ):
+
+        buttons.append([
+            InlineKeyboardButton(
+                f"🛒 {service['name']}",
+                callback_data=
+                f"socialservice:{category_key}:{index}"
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            "🔙 المنصات",
+            callback_data="social"
+        )
+    ])
+
+    return InlineKeyboardMarkup(buttons)
+
+
+# =========================================================
+# SERVICE DETAILS
+# =========================================================
+
+async def program_details(
+    service
+):
+
+    price = service.get(
+        "price",
+        0
+    )
+
+    duration = service.get(
+        "duration",
+        ""
+    )
+
+    description = service.get(
+        "description",
+        ""
+    )
+
+    text = f"""💻 {service['name']}
+
+"""
+
+    if description:
+        text += (
+            f"📝 {description}\n\n"
+        )
+
+    if duration:
+        text += (
+            f"⏳ المدة: {duration}\n"
+        )
+
+    text += (
+        f"\n💰 السعر: "
+        f"{float(price):.2f} جنيه\n"
+    )
+
+    text += """
+━━━━━━━━━━━━━━
+
+اختر ما تريد فعله 👇"""
+
+    return text
+
+
+async def social_details(
+    service
+):
+
+    service_id = str(
+        service["service_id"]
+    )
+
+    provider_service = find_alkabos_service(
+        service_id
+    )
+
+    if not provider_service:
+        return "❌ الخدمة غير متاحة حاليًا."
+
+    minimum = int(
+        float(
+            provider_service.get(
+                "min",
+                1
+            )
+        )
+    )
+
+    maximum = int(
+        float(
+            provider_service.get(
+                "max",
+                1
+            )
+        )
+    )
+
+    rate = float(
+        provider_service.get(
+            "rate",
+            0
+        )
+    )
+
+    cost, sale, usd_egp = (
+        await calculate_price(
+            rate,
+            minimum
+        )
+    )
+
+    # السعر هنا محسوب على الحد الأدنى.
+    # السعر الحقيقي أثناء الطلب يعاد حسابه بالكمية.
+
+    text = f"""📱 {service['name']}
+
+"""
+
+    if service.get("description"):
+        text += (
+            f"📝 {service['description']}\n\n"
+        )
+
+    text += f"""📦 الحد الأدنى: {minimum}
+📦 الحد الأقصى: {maximum}
+
+💰 السعر: يبدأ من {sale:.2f} جنيه لكل {minimum}
+
+━━━━━━━━━━━━━━
+
+اختر ما تريد فعله 👇"""
+
+    return text
+
+
+# =========================================================
+# ALKABOS SERVICE CACHE
+# =========================================================
+
+ALKABOS_SERVICES = []
+
+
+async def refresh_alkabos():
+
+    global ALKABOS_SERVICES
+
+    services = await get_alkabos_services()
+
+    if services:
+        ALKABOS_SERVICES = services
+
+    return ALKABOS_SERVICES
+
+
+def find_alkabos_service(
+    service_id
+):
+
+    for service in ALKABOS_SERVICES:
 
         if str(
             service.get("service")
@@ -499,718 +865,207 @@ def find_service(service_id):
 
 
 # =========================================================
-# SERVICE DETAILS
+# PROGRAM SERVICE
 # =========================================================
 
-def service_details(service):
-
-    name = service.get(
-        "name",
-        "خدمة"
-    )
-
-    service_id = service.get(
-        "service",
-        "-"
-    )
-
-    category = service.get(
-        "category",
-        "خدمات أخرى"
-    )
-
-    service_type = service.get(
-        "type",
-        "Default"
-    )
-
-    rate = service.get(
-        "rate",
-        "0"
-    )
-
-    minimum = service.get(
-        "min",
-        "-"
-    )
-
-    maximum = service.get(
-        "max",
-        "-"
-    )
-
-    refill = (
-        "متاح"
-        if service.get("refill")
-        else "غير متاح"
-    )
-
-    cancel = (
-        "متاح"
-        if service.get("cancel")
-        else "غير متاح"
-    )
-
-    return f"""🛒 {name}
-
-📁 القسم:
-{category}
-
-🆔 رقم الخدمة:
-{service_id}
-
-⚙️ النوع:
-{service_type}
-
-💰 سعر التكلفة:
-{rate} لكل 1000
-
-📦 الحد الأدنى:
-{minimum}
-
-📦 الحد الأقصى:
-{maximum}
-
-🔄 Refill:
-{refill}
-
-❌ Cancel:
-{cancel}
-
-📈 هامش SaQR:
-{PROFIT_MARGIN:.0f}%
-
-اختر ما تريد 👇"""
-
-
-def service_buttons(service_id):
-
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "🛒 شراء الخدمة",
-                callback_data=f"buy:{service_id}"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🔙 رجوع",
-                callback_data="categories:0"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🏠 الرئيسية",
-                callback_data="home"
-            )
-        ],
-    ])
-
-
-# =========================================================
-# START
-# =========================================================
-
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+def get_program_service(
+    category_key,
+    index
 ):
 
-    context.user_data.clear()
-
-    await update.message.reply_text(
-        WELCOME,
-        reply_markup=main_menu()
+    category = PROGRAM_CATALOG.get(
+        category_key
     )
 
+    if not category:
+        return None
+
+    services = category["services"]
+
+    if index >= len(services):
+        return None
+
+    return services[index]
+
 
 # =========================================================
-# CALLBACK HANDLER
+# SOCIAL SERVICE
 # =========================================================
 
-async def callback_handler(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+def get_social_service(
+    category_key,
+    index
 ):
 
-    query = update.callback_query
+    category = SOCIAL_CATALOG.get(
+        category_key
+    )
 
-    await query.answer()
+    if not category:
+        return None
 
-    data = query.data
+    services = category["services"]
 
-    # HOME
-    if data == "home":
+    if index >= len(services):
+        return None
 
-        context.user_data.clear()
+    return services[index]
 
+
+# =========================================================
+# START ORDER
+# =========================================================
+
+async def start_social_order(
+    query,
+    context,
+    category_key,
+    index
+):
+
+    service = get_social_service(
+        category_key,
+        index
+    )
+
+    if not service:
         await query.message.reply_text(
-            WELCOME,
-            reply_markup=main_menu()
+            "❌ الخدمة غير موجودة."
         )
-
         return
 
-    # CATEGORIES
-    if data.startswith("categories:"):
+    provider = find_alkabos_service(
+        service["service_id"]
+    )
 
-        page = int(
-            data.split(":")[1]
-        )
-
-        if not SERVICES:
-            await refresh_services()
-
-        if not SERVICES:
-
-            await query.message.reply_text(
-                "❌ تعذر تحميل الخدمات من الكابوس حاليًا."
-            )
-
-            return
-
+    if not provider:
         await query.message.reply_text(
-            "📁 اختر القسم:",
-            reply_markup=category_keyboard(page)
+            "❌ الخدمة غير متاحة حاليًا."
         )
-
         return
 
-    # CATEGORY
-    if data.startswith("category:"):
+    minimum = int(
+        float(provider.get("min", 1))
+    )
 
-        _, category_index, page = data.split(":")
+    maximum = int(
+        float(provider.get("max", 1))
+    )
 
-        category_index = int(category_index)
-        page = int(page)
+    context.user_data["order"] = {
+        "provider": "alkabos",
+        "service_id":
+            service["service_id"],
+        "service_name":
+            service["name"],
+        "category":
+            category_key,
+        "minimum":
+            minimum,
+        "maximum":
+            maximum,
+    }
 
-        category, services = get_category_services(
-            category_index
-        )
+    await query.message.reply_text(
+        f"""🛒 طلب الخدمة
 
-        if category is None:
+الخدمة:
+{service['name']}
 
-            await query.message.reply_text(
-                "❌ القسم غير موجود."
-            )
+📦 الحد الأدنى: {minimum}
+📦 الحد الأقصى: {maximum}
 
-            return
-
-        await query.message.reply_text(
-            f"""📁 {category}
-
-اختر الخدمة المطلوبة:""",
-            reply_markup=services_keyboard(
-                category_index,
-                page
-            )
-        )
-
-        return
-
-    # SERVICE
-    if data.startswith("service:"):
-
-        service_id = data.split(
-            ":",
-            1
-        )[1]
-
-        service = find_service(
-            service_id
-        )
-
-        if not service:
-
-            await query.message.reply_text(
-                "❌ الخدمة غير موجودة."
-            )
-
-            return
-
-        await query.message.reply_text(
-            service_details(service),
-            reply_markup=service_buttons(
-                service_id
-            )
-        )
-
-        return
-
-    # BUY
-    if data.startswith("buy:"):
-
-        service_id = data.split(
-            ":",
-            1
-        )[1]
-
-        service = find_service(
-            service_id
-        )
-
-        if not service:
-
-            await query.message.reply_text(
-                "❌ الخدمة غير موجودة."
-            )
-
-            return
-
-        context.user_data["order"] = {
-            "service": service,
-            "quantity": 0,
-            "link": "",
-            "extra": "",
-            "cost": 0,
-            "sale_price": 0,
-        }
-
-        service_type = str(
-            service.get(
-                "type",
-                ""
-            )
-        ).lower()
-
-        # CUSTOM COMMENTS
-        if "custom comments" in service_type:
-
-            context.user_data["stage"] = "comments"
-
-            await query.message.reply_text(
-                """💬 أرسل التعليقات المطلوبة.
-
-اكتب كل تعليق في سطر منفصل."""
-            )
-
-            return
-
-        # NORMAL QUANTITY SERVICE
-        if (
-            service.get("min") is not None
-            and service.get("max") is not None
-        ):
-
-            context.user_data["stage"] = "quantity"
-
-            await query.message.reply_text(
-                f"""📦 أرسل الكمية المطلوبة.
-
-الحد الأدنى:
-{service.get("min")}
-
-الحد الأقصى:
-{service.get("max")}
+✍️ أرسل الكمية الآن:
 
 مثال:
 1000"""
-            )
-
-            return
-
-        # PACKAGE SERVICE
-        context.user_data["stage"] = "link"
-
-        await query.message.reply_text(
-            "🔗 أرسل الرابط المطلوب تنفيذ الخدمة عليه."
-        )
-
-        return
-
-    # GO TO PAYMENT
-    if data == "go_payment":
-
-        await show_payment(
-            query,
-            context
-        )
-
-        return
-
-    # PAYMENT SENT
-    if data == "payment_sent":
-
-        order = context.user_data.get(
-            "order"
-        )
-
-        if not order:
-
-            await query.message.reply_text(
-                "❌ لا يوجد طلب مفتوح."
-            )
-
-            return
-
-        context.user_data["stage"] = "proof"
-
-        await query.message.reply_text(
-            """🧾 إثبات الدفع
-
-أرسل الآن صورة واضحة لإيصال التحويل."""
-        )
-
-        return
-
-    # APPROVE
-    if data.startswith("approve:"):
-
-        order_id = int(
-            data.split(":")[1]
-        )
-
-        await approve_order(
-            query,
-            context,
-            order_id
-        )
-
-        return
-
-    # REJECT
-    if data.startswith("reject:"):
-
-        order_id = int(
-            data.split(":")[1]
-        )
-
-        await reject_order(
-            query,
-            context,
-            order_id
-        )
-
-        return
-
-    # ORDERS
-    if data == "orders":
-
-        await show_orders(
-            query
-        )
-
-        return
-
-    # STATUS
-    if data.startswith("status:"):
-
-        order_id = int(
-            data.split(":")[1]
-        )
-
-        await show_order_status(
-            query,
-            order_id
-        )
-
-        return
-
-    # SUPPORT
-    if data == "support":
-
-        await query.message.reply_text(
-            """📞 دعم SaQR Agency
-
-إذا عندك مشكلة في طلب:
-
-🆔 أرسل رقم الطلب
-📝 اشرح المشكلة
-📷 أرفق صورة إذا لزم الأمر
-
-وسيتم مراجعة طلبك."""
-        )
-
-        return
-
-
-# =========================================================
-# TEXT HANDLER
-# =========================================================
-
-async def text_handler(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    stage = context.user_data.get(
-        "stage"
     )
 
-    order = context.user_data.get(
-        "order"
-    )
 
-    if not order or not stage:
-
-        await update.message.reply_text(
-            "استخدم /start لفتح القائمة."
-        )
-
-        return
-
-    service = order["service"]
-
-    # QUANTITY
-    if stage == "quantity":
-
-        value = update.message.text.strip()
-
-        value = value.replace(
-            ",",
-            ""
-        )
-
-        try:
-
-            quantity = int(value)
-
-        except ValueError:
-
-            await update.message.reply_text(
-                "❌ أرسل الكمية كرقم فقط."
-            )
-
-            return
-
-        minimum = int(
-            float(
-                service.get(
-                    "min",
-                    1
-                )
-            )
-        )
-
-        maximum = int(
-            float(
-                service.get(
-                    "max",
-                    999999999
-                )
-            )
-        )
-
-        if quantity < minimum or quantity > maximum:
-
-            await update.message.reply_text(
-                f"""❌ الكمية غير صحيحة.
-
-الحد الأدنى:
-{minimum}
-
-الحد الأقصى:
-{maximum}"""
-            )
-
-            return
-
-        cost, sale_price = calculate_price(
-            service,
-            quantity
-        )
-
-        order["quantity"] = quantity
-        order["cost"] = cost
-        order["sale_price"] = sale_price
-
-        context.user_data["stage"] = "link"
-
-        await update.message.reply_text(
-            f"""📦 الكمية:
-{quantity}
-
-💰 السعر:
-{money(sale_price)}
-
-🔗 الآن أرسل رابط الحساب أو المنشور."""
-        )
-
-        return
-
-    # COMMENTS
-    if stage == "comments":
-
-        comments = update.message.text.strip()
-
-        lines = [
-            line.strip()
-            for line in comments.splitlines()
-            if line.strip()
-        ]
-
-        if not lines:
-
-            await update.message.reply_text(
-                "❌ أرسل التعليقات المطلوبة."
-            )
-
-            return
-
-        quantity = len(lines)
-
-        minimum = int(
-            float(
-                service.get(
-                    "min",
-                    1
-                )
-            )
-        )
-
-        maximum = int(
-            float(
-                service.get(
-                    "max",
-                    999999999
-                )
-            )
-        )
-
-        if quantity < minimum or quantity > maximum:
-
-            await update.message.reply_text(
-                f"""❌ عدد التعليقات يجب أن يكون بين:
-
-{minimum}
-
-و
-
-{maximum}"""
-            )
-
-            return
-
-        cost, sale_price = calculate_price(
-            service,
-            quantity
-        )
-
-        order["quantity"] = quantity
-        order["cost"] = cost
-        order["sale_price"] = sale_price
-        order["extra"] = "\n".join(lines)
-
-        context.user_data["stage"] = "link"
-
-        await update.message.reply_text(
-            f"""💬 عدد التعليقات:
-{quantity}
-
-💰 السعر:
-{money(sale_price)}
-
-🔗 أرسل رابط المنشور."""
-        )
-
-        return
-
-    # LINK
-    if stage == "link":
-
-        link = update.message.text.strip()
-
-        if not (
-            link.startswith("http://")
-            or link.startswith("https://")
-        ):
-
-            await update.message.reply_text(
-                "❌ أرسل رابطًا صحيحًا يبدأ بـ http أو https."
-            )
-
-            return
-
-        order["link"] = link
-
-        if order["quantity"] == 0:
-
-            cost, sale_price = calculate_price(
-                service,
-                0
-            )
-
-            order["cost"] = cost
-            order["sale_price"] = sale_price
-
-        context.user_data["stage"] = "confirm"
-
-        await show_review(
-            update.message,
-            order
-        )
-
-        return
-
-    # PAYMENT
-    if stage == "payment":
-
-        await update.message.reply_text(
-            "اضغط «أرسلت التحويل» ثم أرسل صورة الإيصال."
-        )
-
-        return
-
-    # PROOF
-    if stage == "proof":
-
-        await update.message.reply_text(
-            "🧾 أرسل صورة إيصال التحويل."
-        )
-
-        return
-
-
-# =========================================================
-# ORDER REVIEW
-# =========================================================
-
-async def show_review(
-    message,
-    order
+async def start_program_order(
+    query,
+    context,
+    category_key,
+    index
 ):
 
-    service = order["service"]
+    service = get_program_service(
+        category_key,
+        index
+    )
 
-    text = f"""🧾 مراجعة الطلب
+    if not service:
+        await query.message.reply_text(
+            "❌ الخدمة غير موجودة."
+        )
+        return
 
-🛒 الخدمة:
-{service.get("name", "Service")}
+    quantity = int(
+        service.get(
+            "quantity",
+            1
+        )
+    )
 
-🆔 رقم الخدمة:
-{service.get("service")}
+    price = float(
+        service.get(
+            "price",
+            0
+        )
+    )
 
-📦 الكمية:
-{order["quantity"] or "حسب الخدمة"}
+    context.user_data["order"] = {
+        "provider": "xpro",
+        "service_id":
+            str(service["service_id"]),
+        "service_name":
+            service["name"],
+        "category":
+            category_key,
+        "quantity":
+            quantity,
+        "cost":
+            float(
+                service.get(
+                    "cost",
+                    0
+                )
+            ),
+        "sale_price":
+            price,
+        "needs_link":
+            bool(
+                service.get(
+                    "needs_link",
+                    False
+                )
+            ),
+    }
 
-🔗 الرابط:
-{order["link"]}
+    if service.get(
+        "needs_link",
+        False
+    ):
 
-💰 الإجمالي:
-{money(order["sale_price"])}
+        context.user_data[
+            "waiting_program_link"
+        ] = True
 
-━━━━━━━━━━━━━━
+        await query.message.reply_text(
+            f"""🛒 {service['name']}
 
-هل تريد الانتقال للدفع؟"""
+💰 السعر:
+{price:.2f} جنيه
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "💳 متابعة للدفع",
-                callback_data="go_payment"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "❌ إلغاء",
-                callback_data="home"
-            )
-        ],
-    ])
+🔗 أرسل البيانات المطلوبة للخدمة الآن."""
+        )
 
-    await message.reply_text(
-        text,
-        reply_markup=keyboard
+        return
+
+    await show_payment(
+        query.message,
+        context,
+        context.user_data["order"]
     )
 
 
@@ -1219,34 +1074,25 @@ async def show_review(
 # =========================================================
 
 async def show_payment(
-    query,
-    context
+    message,
+    context,
+    order_data
 ):
 
-    order = context.user_data.get(
-        "order"
+    sale_price = float(
+        order_data["sale_price"]
     )
-
-    if not order:
-
-        await query.message.reply_text(
-            "❌ انتهت جلسة الطلب."
-        )
-
-        return
-
-    context.user_data["stage"] = "payment"
 
     text = f"""💳 الدفع
 
-🛒 الخدمة:
-{order["service"].get("name", "Service")}
+🧾 الخدمة:
+{order_data["service_name"]}
 
 📦 الكمية:
-{order["quantity"] or "حسب الخدمة"}
+{order_data["quantity"]}
 
-💰 المبلغ المطلوب:
-{money(order["sale_price"])}
+💰 الإجمالي:
+{sale_price:.2f} جنيه
 
 ━━━━━━━━━━━━━━
 
@@ -1261,91 +1107,116 @@ async def show_payment(
 
 ━━━━━━━━━━━━━━
 
-1️⃣ حوّل المبلغ بالكامل.
-2️⃣ احتفظ بالإيصال.
-3️⃣ اضغط «أرسلت التحويل».
-4️⃣ أرسل صورة الإيصال.
+بعد التحويل اضغط:
 
-⚠️ لن يتم تنفيذ الطلب قبل مراجعة الدفع."""
+✅ أرسلت التحويل
+
+ثم أرسل صورة إثبات الدفع."""
 
     keyboard = InlineKeyboardMarkup([
+
         [
             InlineKeyboardButton(
                 "✅ أرسلت التحويل",
                 callback_data="payment_sent"
             )
         ],
+
         [
             InlineKeyboardButton(
                 "❌ إلغاء",
                 callback_data="home"
             )
         ],
+
     ])
 
-    await query.message.reply_text(
+    await message.reply_text(
         text,
         reply_markup=keyboard
     )
 
 
 # =========================================================
-# PAYMENT PROOF
+# SAVE ORDER
 # =========================================================
 
-async def photo_handler(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+def save_order(
+    user,
+    order_data,
+    proof_file_id=""
 ):
 
-    if context.user_data.get(
-        "stage"
-    ) != "proof":
+    conn = db()
 
-        await update.message.reply_text(
-            "استخدم /start لبدء طلب."
+    cursor = conn.execute("""
+        INSERT INTO orders (
+            user_id,
+            username,
+            provider,
+            service_id,
+            service_name,
+            category,
+            link,
+            quantity,
+            cost,
+            sale_price,
+            payment_status,
+            order_status,
+            provider_order_id,
+            proof_file_id,
+            created_at
         )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
 
-        return
+        user.id,
 
-    order = context.user_data.get(
-        "order"
-    )
+        user.username or "",
 
-    if not order:
+        order_data["provider"],
 
-        await update.message.reply_text(
-            "❌ لا يوجد طلب."
-        )
+        order_data["service_id"],
 
-        return
+        order_data["service_name"],
 
-    photo = update.message.photo[-1]
+        order_data.get(
+            "category",
+            ""
+        ),
 
-    local_order_id = create_order(
-        update.effective_user,
-        order,
-        photo.file_id
-    )
+        order_data.get(
+            "link",
+            ""
+        ),
 
-    context.user_data.clear()
+        order_data["quantity"],
 
-    await update.message.reply_text(
-        f"""✅ تم استلام إثبات الدفع
+        order_data.get(
+            "cost",
+            0
+        ),
 
-🆔 رقم طلب SaQR:
-#SAQ-{local_order_id:05d}
+        order_data["sale_price"],
 
-📌 الحالة:
-في انتظار مراجعة الدفع
+        "pending",
 
-سيتم إشعارك بعد المراجعة."""
-    )
+        "waiting_payment",
 
-    await notify_admin(
-        update,
-        local_order_id
-    )
+        "",
+
+        proof_file_id,
+
+        datetime.now().isoformat(),
+
+    ))
+
+    order_id = cursor.lastrowid
+
+    conn.commit()
+    conn.close()
+
+    return order_id
 
 
 # =========================================================
@@ -1353,18 +1224,14 @@ async def photo_handler(
 # =========================================================
 
 async def notify_admin(
-    update,
+    context,
     order_id
 ):
 
-    conn = get_db()
+    conn = db()
 
     row = conn.execute(
-        """
-        SELECT *
-        FROM orders
-        WHERE id = ?
-        """,
+        "SELECT * FROM orders WHERE id = ?",
         (order_id,)
     ).fetchone()
 
@@ -1373,19 +1240,12 @@ async def notify_admin(
     if not row:
         return
 
-    username = (
-        f"@{row['username']}"
-        if row["username"]
-        else "بدون Username"
-    )
-
     text = f"""🔔 طلب دفع جديد
 
-🆔 رقم SaQR:
-#SAQ-{row["id"]:05d}
+🆔 #SAQ-{row["id"]:05d}
 
 👤 العميل:
-{username}
+{row["username"] or "بدون Username"}
 
 🆔 Telegram ID:
 {row["user_id"]}
@@ -1395,45 +1255,49 @@ async def notify_admin(
 🛒 الخدمة:
 {row["service_name"]}
 
-🆔 رقم الخدمة:
-{row["service_id"]}
-
 📦 الكمية:
-{row["quantity"] or "حسب الخدمة"}
+{row["quantity"]}
 
 🔗 الرابط:
-{row["link"]}
+{row["link"] or "غير مطلوب"}
 
 💰 التكلفة:
-{money(row["cost"])}
+{row["cost"]:.2f} جنيه
 
 💵 سعر البيع:
-{money(row["sale_price"])}
+{row["sale_price"]:.2f} جنيه
 
-📈 الربح:
-{PROFIT_MARGIN:.0f}%
+📈 هامش الربح:
+{PROFIT_MARGIN}%
+
+🏷️ المورد:
+{row["provider"]}
 
 ━━━━━━━━━━━━━━
 
-📌 الدفع:
-في انتظار المراجعة"""
+💳 في انتظار مراجعة الدفع."""
 
     keyboard = InlineKeyboardMarkup([
+
         [
             InlineKeyboardButton(
                 "✅ تأكيد الدفع وتنفيذ",
-                callback_data=f"approve:{row['id']}"
+                callback_data=
+                f"approve:{order_id}"
             )
         ],
+
         [
             InlineKeyboardButton(
                 "❌ رفض الدفع",
-                callback_data=f"reject:{row['id']}"
+                callback_data=
+                f"reject:{order_id}"
             )
         ],
+
     ])
 
-    await update.get_bot().send_message(
+    await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=text,
         reply_markup=keyboard
@@ -1441,319 +1305,609 @@ async def notify_admin(
 
     if row["proof_file_id"]:
 
-        await update.get_bot().send_photo(
+        await context.bot.send_photo(
             chat_id=ADMIN_ID,
             photo=row["proof_file_id"],
-            caption=(
-                f"🧾 إثبات الدفع "
-                f"#SAQ-{row['id']:05d}"
-            )
+            caption=
+            f"🧾 إثبات الدفع "
+            f"#SAQ-{row['id']:05d}"
         )
 
 
 # =========================================================
-# ADMIN APPROVE
+# CALLBACK
 # =========================================================
 
-async def approve_order(
-    query,
-    context,
-    local_id
+async def callback_handler(
+    update,
+    context
 ):
 
-    if query.from_user.id != ADMIN_ID:
+    query = update.callback_query
+
+    await query.answer()
+
+    data = query.data
+
+    # -----------------------------------------------------
+    # HOME
+    # -----------------------------------------------------
+
+    if data == "home":
 
         await query.message.reply_text(
-            "❌ غير مصرح."
+            WELCOME,
+            reply_markup=main_menu()
         )
 
         return
 
-    conn = get_db()
+    # -----------------------------------------------------
+    # PROGRAMS
+    # -----------------------------------------------------
 
-    row = conn.execute(
-        """
-        SELECT *
-        FROM orders
-        WHERE id = ?
-        """,
-        (local_id,)
-    ).fetchone()
-
-    conn.close()
-
-    if not row:
+    if data == "programs":
 
         await query.message.reply_text(
-            "❌ الطلب غير موجود."
-        )
-
-        return
-
-    if row["payment_status"] == "approved":
-
-        await query.message.reply_text(
-            "⚠️ الطلب تم اعتماده بالفعل."
-        )
-
-        return
-
-    service = find_service(
-        row["service_id"]
-    )
-
-    if not service:
-
-        await query.message.reply_text(
-            "❌ الخدمة لم تعد موجودة في قائمة الكابوس."
-        )
-
-        return
-
-    conn = get_db()
-
-    conn.execute(
-        """
-        UPDATE orders
-        SET payment_status = 'approved',
-            order_status = 'sending'
-        WHERE id = ?
-        """,
-        (local_id,)
-    )
-
-    conn.commit()
-    conn.close()
-
-    try:
-
-        result = await add_alkabos_order(
-            service,
-            row["link"],
-            row["quantity"],
-            row["extra"]
-        )
-
-    except Exception as error:
-
-        conn = get_db()
-
-        conn.execute(
-            """
-            UPDATE orders
-            SET order_status = 'provider_error'
-            WHERE id = ?
-            """,
-            (local_id,)
-        )
-
-        conn.commit()
-        conn.close()
-
-        await query.message.reply_text(
-            f"""❌ حدث خطأ أثناء إرسال الطلب للكابوس:
-
-{error}
-
-لم يتم إرسال الطلب بنجاح."""
-        )
-
-        return
-
-    if not isinstance(result, dict) or not result.get("order"):
-
-        conn = get_db()
-
-        conn.execute(
-            """
-            UPDATE orders
-            SET order_status = 'provider_error',
-                provider_status = ?
-            WHERE id = ?
-            """,
-            (
-                json.dumps(
-                    result,
-                    ensure_ascii=False
-                ),
-                local_id
-            )
-        )
-
-        conn.commit()
-        conn.close()
-
-        await query.message.reply_text(
-            "❌ الكابوس رفض الطلب:\n\n"
-            + json.dumps(
-                result,
-                ensure_ascii=False,
-                indent=2
+            "💻 البرامج والاشتراكات\n\n"
+            "اختر التصنيف:",
+            reply_markup=catalog_keyboard(
+                PROGRAM_CATALOG,
+                "programcat"
             )
         )
 
         return
 
-    provider_order_id = str(
-        result["order"]
-    )
+    if data.startswith(
+        "programcat:"
+    ):
 
-    conn = get_db()
+        category_key = data.split(
+            ":",
+            1
+        )[1]
 
-    conn.execute(
-        """
-        UPDATE orders
-        SET order_status = 'processing',
-            alkabos_order_id = ?
-        WHERE id = ?
-        """,
-        (
-            provider_order_id,
-            local_id
+        category = PROGRAM_CATALOG.get(
+            category_key
         )
-    )
 
-    conn.commit()
-    conn.close()
+        if not category:
+            return
 
-    await query.message.reply_text(
-        f"""✅ تم تنفيذ الطلب
+        if not category["services"]:
 
-🆔 SaQR:
-#SAQ-{local_id:05d}
+            await query.message.reply_text(
+                f"{category['title']}\n\n"
+                "⏳ لا توجد خدمات مضافة "
+                "في هذا التصنيف حاليًا."
+            )
 
-🆔 رقم الكابوس:
-{provider_order_id}
+            return
 
-📦 الحالة:
-جاري التنفيذ"""
-    )
+        await query.message.reply_text(
+            category["title"] +
+            "\n\nاختر الخدمة:",
+            reply_markup=
+            program_services_keyboard(
+                category_key
+            )
+        )
 
-    await context.bot.send_message(
-        chat_id=row["user_id"],
-        text=f"""✅ تم تأكيد طلبك
+        return
 
-🆔 رقم الطلب:
-#SAQ-{local_id:05d}
+    if data.startswith(
+        "programservice:"
+    ):
 
-🛒 الخدمة:
-{row["service_name"]}
+        _, category_key, index = (
+            data.split(":")
+        )
 
-📦 الكمية:
-{row["quantity"] or "حسب الخدمة"}
+        service = get_program_service(
+            category_key,
+            int(index)
+        )
 
-💰 المبلغ:
-{money(row["sale_price"])}
+        if not service:
+            return
 
-🆔 رقم الكابوس:
-{provider_order_id}
+        text = await program_details(
+            service
+        )
 
-📌 الحالة:
-جاري التنفيذ""",
-        reply_markup=InlineKeyboardMarkup([
+        keyboard = InlineKeyboardMarkup([
+
             [
                 InlineKeyboardButton(
-                    "🔄 متابعة الحالة",
-                    callback_data=f"status:{local_id}"
+                    "🛒 شراء الخدمة",
+                    callback_data=
+                    f"buyprogram:{category_key}:{index}"
                 )
             ],
+
+            [
+                InlineKeyboardButton(
+                    "🔙 رجوع",
+                    callback_data=
+                    f"programcat:{category_key}"
+                )
+            ],
+
             [
                 InlineKeyboardButton(
                     "🏠 الرئيسية",
                     callback_data="home"
                 )
             ],
+
         ])
-    )
-
-
-# =========================================================
-# ADMIN REJECT
-# =========================================================
-
-async def reject_order(
-    query,
-    context,
-    local_id
-):
-
-    if query.from_user.id != ADMIN_ID:
 
         await query.message.reply_text(
-            "❌ غير مصرح."
+            text,
+            reply_markup=keyboard
         )
 
         return
 
-    conn = get_db()
+    if data.startswith(
+        "buyprogram:"
+    ):
 
-    row = conn.execute(
-        """
-        SELECT *
-        FROM orders
-        WHERE id = ?
-        """,
-        (local_id,)
-    ).fetchone()
+        _, category_key, index = (
+            data.split(":")
+        )
 
-    if not row:
+        await start_program_order(
+            query,
+            context,
+            category_key,
+            int(index)
+        )
 
+        return
+
+    # -----------------------------------------------------
+    # SOCIAL
+    # -----------------------------------------------------
+
+    if data == "social":
+
+        await query.message.reply_text(
+            "📱 السوشيال ميديا والماركتينج\n\n"
+            "اختر المنصة:",
+            reply_markup=catalog_keyboard(
+                SOCIAL_CATALOG,
+                "socialcat"
+            )
+        )
+
+        return
+
+    if data.startswith(
+        "socialcat:"
+    ):
+
+        category_key = data.split(
+            ":",
+            1
+        )[1]
+
+        category = SOCIAL_CATALOG.get(
+            category_key
+        )
+
+        if not category:
+            return
+
+        if not category["services"]:
+
+            await query.message.reply_text(
+                f"{category['title']}\n\n"
+                "⏳ لا توجد خدمات مضافة "
+                "في هذا التصنيف حاليًا."
+            )
+
+            return
+
+        await query.message.reply_text(
+            category["title"] +
+            "\n\nاختر الخدمة:",
+            reply_markup=
+            social_services_keyboard(
+                category_key
+            )
+        )
+
+        return
+
+    if data.startswith(
+        "socialservice:"
+    ):
+
+        _, category_key, index = (
+            data.split(":")
+        )
+
+        service = get_social_service(
+            category_key,
+            int(index)
+        )
+
+        if not service:
+            return
+
+        text = await social_details(
+            service
+        )
+
+        keyboard = InlineKeyboardMarkup([
+
+            [
+                InlineKeyboardButton(
+                    "🛒 شراء الخدمة",
+                    callback_data=
+                    f"buysocial:{category_key}:{index}"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    "🔙 رجوع",
+                    callback_data=
+                    f"socialcat:{category_key}"
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    "🏠 الرئيسية",
+                    callback_data="home"
+                )
+            ],
+
+        ])
+
+        await query.message.reply_text(
+            text,
+            reply_markup=keyboard
+        )
+
+        return
+
+    if data.startswith(
+        "buysocial:"
+    ):
+
+        _, category_key, index = (
+            data.split(":")
+        )
+
+        await refresh_alkabos()
+
+        await start_social_order(
+            query,
+            context,
+            category_key,
+            int(index)
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # PAYMENT SENT
+    # -----------------------------------------------------
+
+    if data == "payment_sent":
+
+        order = context.user_data.get(
+            "order"
+        )
+
+        if not order:
+
+            await query.message.reply_text(
+                "❌ لا يوجد طلب مفتوح."
+            )
+
+            return
+
+        context.user_data[
+            "waiting_proof"
+        ] = True
+
+        await query.message.reply_text(
+            """🧾 إثبات الدفع
+
+أرسل الآن صورة واضحة لإيصال التحويل.
+
+⚠️ يجب أن تكون الصورة واضحة وتظهر قيمة التحويل."""
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # ADMIN APPROVE
+    # -----------------------------------------------------
+
+    if data.startswith(
+        "approve:"
+    ):
+
+        if query.from_user.id != ADMIN_ID:
+
+            await query.message.reply_text(
+                "❌ غير مصرح."
+            )
+
+            return
+
+        order_id = int(
+            data.split(":")[1]
+        )
+
+        conn = db()
+
+        row = conn.execute(
+            "SELECT * FROM orders WHERE id = ?",
+            (order_id,)
+        ).fetchone()
+
+        if not row:
+
+            conn.close()
+
+            await query.message.reply_text(
+                "❌ الطلب غير موجود."
+            )
+
+            return
+
+        if row["payment_status"] == "approved":
+
+            conn.close()
+
+            await query.message.reply_text(
+                "⚠️ تم اعتماد الطلب بالفعل."
+            )
+
+            return
+
+        # -------------------------------------------------
+        # X PRO STORE
+        # -------------------------------------------------
+
+        if row["provider"] == "xpro":
+
+            if not XPRO_API_KEY:
+
+                conn.close()
+
+                await query.message.reply_text(
+                    "❌ X Pro Store API غير مفعّل."
+                )
+
+                return
+
+            result = await create_xpro_order(
+                row["service_id"],
+                row["quantity"]
+            )
+
+        # -------------------------------------------------
+        # ALKABOS
+        # -------------------------------------------------
+
+        else:
+
+            result = await create_alkabos_order(
+                row["service_id"],
+                row["link"],
+                row["quantity"]
+            )
+
+        if not result:
+
+            conn.close()
+
+            await query.message.reply_text(
+                "❌ فشل الاتصال بمزود الخدمة."
+            )
+
+            return
+
+        # Try common provider order fields
+        provider_order_id = (
+            result.get("order")
+            or result.get("order_id")
+            or result.get("id")
+        )
+
+        if not provider_order_id:
+
+            conn.close()
+
+            await query.message.reply_text(
+                "⚠️ المزود لم يرجع رقم الطلب.\n\n"
+                f"الرد:\n{result}"
+            )
+
+            return
+
+        conn.execute("""
+            UPDATE orders
+            SET payment_status = 'approved',
+                order_status = 'processing',
+                provider_order_id = ?
+            WHERE id = ?
+        """, (
+            str(provider_order_id),
+            order_id
+        ))
+
+        conn.commit()
         conn.close()
 
         await query.message.reply_text(
-            "❌ الطلب غير موجود."
+            f"""✅ تم تنفيذ الطلب
+
+🆔 #SAQ-{order_id:05d}
+
+📦 رقم طلب المورد:
+{provider_order_id}"""
+        )
+
+        try:
+
+            await context.bot.send_message(
+                chat_id=row["user_id"],
+                text=f"""✅ تم تنفيذ طلبك
+
+🆔 رقم الطلب:
+#SAQ-{order_id:05d}
+
+🛒 الخدمة:
+{row["service_name"]}
+
+📦 الكمية:
+{row["quantity"]}
+
+⏳ الحالة:
+جاري التنفيذ."""
+            )
+
+        except Exception as e:
+            print(
+                "Customer notify error:",
+                e
+            )
+
+        return
+
+    # -----------------------------------------------------
+    # ADMIN REJECT
+    # -----------------------------------------------------
+
+    if data.startswith(
+        "reject:"
+    ):
+
+        if query.from_user.id != ADMIN_ID:
+
+            await query.message.reply_text(
+                "❌ غير مصرح."
+            )
+
+            return
+
+        order_id = int(
+            data.split(":")[1]
+        )
+
+        conn = db()
+
+        row = conn.execute(
+            "SELECT * FROM orders WHERE id = ?",
+            (order_id,)
+        ).fetchone()
+
+        if not row:
+
+            conn.close()
+
+            return
+
+        conn.execute("""
+            UPDATE orders
+            SET payment_status = 'rejected',
+                order_status = 'cancelled'
+            WHERE id = ?
+        """, (order_id,))
+
+        conn.commit()
+        conn.close()
+
+        await query.message.reply_text(
+            f"❌ تم رفض الدفع للطلب "
+            f"#SAQ-{order_id:05d}"
+        )
+
+        try:
+
+            await context.bot.send_message(
+                chat_id=row["user_id"],
+                text=f"""❌ تم رفض إثبات الدفع
+
+🆔 الطلب:
+#SAQ-{order_id:05d}
+
+إذا كنت تعتقد أن هناك خطأ، تواصل مع الدعم."""
+            )
+
+        except Exception as e:
+            print(
+                "Reject notify error:",
+                e
+            )
+
+        return
+
+    # -----------------------------------------------------
+    # MY ORDERS
+    # -----------------------------------------------------
+
+    if data == "my_orders":
+
+        await show_my_orders(
+            query,
+            context
         )
 
         return
 
-    conn.execute(
-        """
-        UPDATE orders
-        SET payment_status = 'rejected',
-            order_status = 'payment_rejected'
-        WHERE id = ?
-        """,
-        (local_id,)
-    )
+    # -----------------------------------------------------
+    # SUPPORT
+    # -----------------------------------------------------
 
-    conn.commit()
-    conn.close()
+    if data == "support":
 
-    await query.message.reply_text(
-        f"❌ تم رفض الدفع للطلب #SAQ-{local_id:05d}"
-    )
+        await query.message.reply_text(
+            """🎧 الدعم الفني
 
-    await context.bot.send_message(
-        chat_id=row["user_id"],
-        text=f"""❌ لم يتم اعتماد إثبات الدفع
+للتواصل مع إدارة SaQR Agency:
 
-🆔 رقم الطلب:
-#SAQ-{local_id:05d}
+📩 أرسل رسالتك هنا وسيتم تحويلها للإدارة."""
+        )
 
-إذا كنت تعتقد أن هناك خطأ، تواصل مع الدعم."""
-    )
+        context.user_data[
+            "support_mode"
+        ] = True
+
+        return
 
 
 # =========================================================
-# CUSTOMER ORDERS
+# MY ORDERS
 # =========================================================
 
-async def show_orders(
-    query
+async def show_my_orders(
+    query,
+    context
 ):
 
-    conn = get_db()
+    user_id = query.from_user.id
 
-    rows = conn.execute(
-        """
+    conn = db()
+
+    rows = conn.execute("""
         SELECT *
         FROM orders
         WHERE user_id = ?
         ORDER BY id DESC
         LIMIT 10
-        """,
-        (query.from_user.id,)
-    ).fetchall()
+    """, (
+        user_id,
+    )).fetchall()
 
     conn.close()
 
@@ -1764,265 +1918,407 @@ async def show_orders(
             reply_markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton(
-                        "🛒 تصفح الخدمات",
-                        callback_data="categories:0"
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
                         "🏠 الرئيسية",
                         callback_data="home"
                     )
-                ],
+                ]
             ])
         )
 
         return
 
-    text = "📦 آخر طلباتك:\n\n"
-
-    buttons = []
+    text = "📦 آخر طلباتك\n\n"
 
     for row in rows:
 
-        text += f"""🆔 #SAQ-{row["id"]:05d}
-🛒 {row["service_name"]}
-📦 {row["quantity"] or "حسب الخدمة"}
-💰 {money(row["sale_price"])}
-📌 {row["order_status"]}
-
-"""
-
-        if row["alkabos_order_id"]:
-
-            buttons.append([
-                InlineKeyboardButton(
-                    f"🔄 #SAQ-{row['id']:05d}",
-                    callback_data=(
-                        f"status:{row['id']}"
-                    )
-                )
-            ])
-
-    buttons.append([
-        InlineKeyboardButton(
-            "🏠 الرئيسية",
-            callback_data="home"
+        text += (
+            f"🆔 #SAQ-{row['id']:05d}\n"
+            f"🛒 {row['service_name']}\n"
+            f"📦 الكمية: {row['quantity']}\n"
+            f"💰 {row['sale_price']:.2f} جنيه\n"
+            f"⏳ {row['order_status']}\n"
+            f"━━━━━━━━━━━━━━\n"
         )
-    ])
 
     await query.message.reply_text(
         text,
-        reply_markup=InlineKeyboardMarkup(
-            buttons
-        )
-    )
-
-
-# =========================================================
-# ORDER STATUS
-# =========================================================
-
-async def show_order_status(
-    query,
-    local_id
-):
-
-    conn = get_db()
-
-    row = conn.execute(
-        """
-        SELECT *
-        FROM orders
-        WHERE id = ?
-        AND user_id = ?
-        """,
-        (
-            local_id,
-            query.from_user.id
-        )
-    ).fetchone()
-
-    conn.close()
-
-    if not row:
-
-        await query.message.reply_text(
-            "❌ الطلب غير موجود."
-        )
-
-        return
-
-    if not row["alkabos_order_id"]:
-
-        await query.message.reply_text(
-            f"""🆔 #SAQ-{local_id:05d}
-
-📌 الحالة:
-{row["order_status"]}
-
-لم يتم إرسال الطلب للمزود بعد."""
-        )
-
-        return
-
-    try:
-
-        result = await get_alkabos_status(
-            row["alkabos_order_id"]
-        )
-
-    except Exception as error:
-
-        await query.message.reply_text(
-            f"""❌ تعذر تحديث الحالة حاليًا:
-
-{error}"""
-        )
-
-        return
-
-    status = str(
-        result.get(
-            "status",
-            "Unknown"
-        )
-    )
-
-    remains = result.get(
-        "remains",
-        "-"
-    )
-
-    start_count = result.get(
-        "start_count",
-        "-"
-    )
-
-    conn = get_db()
-
-    conn.execute(
-        """
-        UPDATE orders
-        SET provider_status = ?,
-            order_status = ?
-        WHERE id = ?
-        """,
-        (
-            status,
-            status,
-            local_id
-        )
-    )
-
-    conn.commit()
-    conn.close()
-
-    await query.message.reply_text(
-        f"""📦 حالة الطلب
-
-🆔 SaQR:
-#SAQ-{local_id:05d}
-
-🆔 رقم الكابوس:
-{row["alkabos_order_id"]}
-
-🛒 الخدمة:
-{row["service_name"]}
-
-📌 الحالة:
-{status}
-
-📊 البداية:
-{start_count}
-
-📉 المتبقي:
-{remains}""",
         reply_markup=InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "🔄 تحديث",
-                    callback_data=f"status:{local_id}"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "📦 طلباتي",
-                    callback_data="orders"
-                )
-            ],
             [
                 InlineKeyboardButton(
                     "🏠 الرئيسية",
                     callback_data="home"
                 )
-            ],
+            ]
         ])
     )
 
 
 # =========================================================
-# ADMIN COMMANDS
+# MESSAGE HANDLER
 # =========================================================
 
-async def refresh_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+async def message_handler(
+    update,
+    context
 ):
 
-    if update.effective_user.id != ADMIN_ID:
+    user = update.effective_user
+
+    # -----------------------------------------------------
+    # SUPPORT
+    # -----------------------------------------------------
+
+    if context.user_data.get(
+        "support_mode"
+    ):
+
+        text = update.message.text or ""
+
+        context.user_data[
+            "support_mode"
+        ] = False
+
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"""📩 رسالة دعم جديدة
+
+👤 العميل:
+{user.username or "بدون Username"}
+
+🆔 Telegram ID:
+{user.id}
+
+━━━━━━━━━━━━━━
+
+{text}"""
+        )
 
         await update.message.reply_text(
-            "❌ غير مصرح."
+            "✅ تم إرسال رسالتك للإدارة."
         )
 
         return
 
-    services = await refresh_services()
+    # -----------------------------------------------------
+    # PROGRAM LINK
+    # -----------------------------------------------------
 
-    await update.message.reply_text(
-        f"""✅ تم تحديث الخدمات
+    if context.user_data.get(
+        "waiting_program_link"
+    ):
 
-📦 عدد الخدمات:
-{len(services)}"""
-    )
-
-
-async def balance_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
-    if update.effective_user.id != ADMIN_ID:
-
-        await update.message.reply_text(
-            "❌ غير مصرح."
+        order = context.user_data.get(
+            "order"
         )
 
-        return
+        if not order:
+            return
 
-    try:
+        order["link"] = (
+            update.message.text or ""
+        )
 
-        balance = await get_alkabos_balance()
-
-        await update.message.reply_text(
-            "💰 رصيد الكابوس:\n\n"
-            + json.dumps(
-                balance,
-                ensure_ascii=False,
-                indent=2
+        order["quantity"] = int(
+            order.get(
+                "quantity",
+                1
             )
         )
 
-    except Exception as error:
+        context.user_data[
+            "waiting_program_link"
+        ] = False
+
+        await show_payment(
+            update.message,
+            context,
+            order
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # SOCIAL QUANTITY
+    # -----------------------------------------------------
+
+    order = context.user_data.get(
+        "order"
+    )
+
+    if order and order.get(
+        "provider"
+    ) == "alkabos":
+
+        if not context.user_data.get(
+            "waiting_proof"
+        ):
+
+            try:
+
+                quantity = int(
+                    update.message.text
+                )
+
+            except Exception:
+
+                await update.message.reply_text(
+                    "❌ أرسل الكمية كرقم فقط."
+                )
+
+                return
+
+            minimum = int(
+                order["minimum"]
+            )
+
+            maximum = int(
+                order["maximum"]
+            )
+
+            if quantity < minimum:
+
+                await update.message.reply_text(
+                    f"❌ الحد الأدنى هو {minimum}."
+                )
+
+                return
+
+            if quantity > maximum:
+
+                await update.message.reply_text(
+                    f"❌ الحد الأقصى هو {maximum}."
+                )
+
+                return
+
+            provider = find_alkabos_service(
+                order["service_id"]
+            )
+
+            if not provider:
+
+                await update.message.reply_text(
+                    "❌ الخدمة لم تعد متاحة."
+                )
+
+                return
+
+            rate = float(
+                provider.get(
+                    "rate",
+                    0
+                )
+            )
+
+            cost, sale, usd_egp = (
+                await calculate_price(
+                    rate,
+                    quantity
+                )
+            )
+
+            order["quantity"] = quantity
+            order["cost"] = cost
+            order["sale_price"] = sale
+
+            await update.message.reply_text(
+                f"""🧾 ملخص الطلب
+
+🛒 الخدمة:
+{order["service_name"]}
+
+📦 الكمية:
+{quantity}
+
+💱 سعر الدولار:
+{usd_egp:.2f} جنيه
+
+💰 تكلفة الخدمة:
+{cost:.2f} جنيه
+
+💵 السعر النهائي:
+{sale:.2f} جنيه
+
+━━━━━━━━━━━━━━
+
+🔗 أرسل رابط الحساب/المنشور الآن."""
+            )
+
+            context.user_data[
+                "waiting_social_link"
+            ] = True
+
+            return
+
+    # -----------------------------------------------------
+    # SOCIAL LINK
+    # -----------------------------------------------------
+
+    if context.user_data.get(
+        "waiting_social_link"
+    ):
+
+        order = context.user_data.get(
+            "order"
+        )
+
+        if not order:
+            return
+
+        order["link"] = (
+            update.message.text or ""
+        )
+
+        context.user_data[
+            "waiting_social_link"
+        ] = False
+
+        await show_payment(
+            update.message,
+            context,
+            order
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # PROOF
+    # -----------------------------------------------------
+
+    if context.user_data.get(
+        "waiting_proof"
+    ):
+
+        if not update.message.photo:
+
+            await update.message.reply_text(
+                "❌ أرسل صورة إثبات الدفع."
+            )
+
+            return
+
+        order = context.user_data.get(
+            "order"
+        )
+
+        if not order:
+
+            await update.message.reply_text(
+                "❌ لا يوجد طلب مفتوح."
+            )
+
+            return
+
+        proof_file_id = (
+            update.message.photo[-1].file_id
+        )
+
+        order_id = save_order(
+            user,
+            order,
+            proof_file_id
+        )
+
+        context.user_data[
+            "waiting_proof"
+        ] = False
+
+        await notify_admin(
+            context,
+            order_id
+        )
 
         await update.message.reply_text(
-            f"❌ تعذر قراءة الرصيد:\n{error}"
+            f"""✅ تم استلام إثبات الدفع
+
+🆔 رقم الطلب:
+#SAQ-{order_id:05d}
+
+⏳ الحالة:
+في انتظار مراجعة الإدارة."""
         )
+
+        return
+
+    await update.message.reply_text(
+        "استخدم /start لفتح القائمة الرئيسية."
+    )
 
 
 # =========================================================
-# ERROR
+# START
+# =========================================================
+
+async def start(
+    update,
+    context
+):
+
+    context.user_data.clear()
+
+    await update.message.reply_text(
+        WELCOME,
+        reply_markup=main_menu()
+    )
+
+
+# =========================================================
+# COMMANDS
+# =========================================================
+
+async def balance(
+    update,
+    context
+):
+
+    if update.effective_user.id != ADMIN_ID:
+
+        await update.message.reply_text(
+            "❌ غير مصرح."
+        )
+
+        return
+
+    result = await get_alkabos_balance()
+
+    await update.message.reply_text(
+        f"💰 Alkabos Balance\n\n"
+        f"{result}"
+    )
+
+
+async def status(
+    update,
+    context
+):
+
+    if update.effective_user.id != ADMIN_ID:
+
+        await update.message.reply_text(
+            "❌ غير مصرح."
+        )
+
+        return
+
+    if not context.args:
+
+        await update.message.reply_text(
+            "الاستخدام:\n/status ORDER_ID"
+        )
+
+        return
+
+    result = await get_alkabos_status(
+        context.args[0]
+    )
+
+    await update.message.reply_text(
+        f"📊 الحالة:\n\n{result}"
+    )
+
+
+# =========================================================
+# ERROR HANDLER
 # =========================================================
 
 async def error_handler(
@@ -2032,28 +2328,7 @@ async def error_handler(
 
     print(
         "BOT ERROR:",
-        repr(context.error)
-    )
-
-
-# =========================================================
-# STARTUP
-# =========================================================
-
-async def post_init(
-    application
-):
-
-    init_db()
-
-    services = await refresh_services()
-
-    print(
-        "SaQR Agency started."
-    )
-
-    print(
-        f"Services loaded: {len(services)}"
+        context.error
     )
 
 
@@ -2063,10 +2338,11 @@ async def post_init(
 
 def main():
 
+    init_db()
+
     application = (
         Application.builder()
         .token(BOT_TOKEN)
-        .post_init(post_init)
         .build()
     )
 
@@ -2079,15 +2355,15 @@ def main():
 
     application.add_handler(
         CommandHandler(
-            "refresh",
-            refresh_command
+            "balance",
+            balance
         )
     )
 
     application.add_handler(
         CommandHandler(
-            "balance",
-            balance_command
+            "status",
+            status
         )
     )
 
@@ -2099,16 +2375,10 @@ def main():
 
     application.add_handler(
         MessageHandler(
-            filters.PHOTO,
-            photo_handler
-        )
-    )
-
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT
-            & ~filters.COMMAND,
-            text_handler
+            filters.PHOTO |
+            filters.TEXT &
+            ~filters.COMMAND,
+            message_handler
         )
     )
 
@@ -2117,10 +2387,12 @@ def main():
     )
 
     print(
-        "SaQR Agency bot is running..."
+        "SaQR Agency Bot started."
     )
 
-    application.run_polling()
+    application.run_polling(
+        drop_pending_updates=True
+    )
 
 
 if __name__ == "__main__":
