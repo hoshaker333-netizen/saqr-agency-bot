@@ -48,7 +48,7 @@ def money(x): return Decimal(str(x)).quantize(Decimal('.01'),rounding=ROUND_HALF
 def price(rate,q,ratefx):
  cost=Decimal(str(rate))*Decimal(str(q))/Decimal(1000)*ratefx; return money(cost),money(cost*(1+MARGIN/100))
 def plat(s):
- t=str(s).lower(); mp=[('Instagram',['instagram','انستجرام','انستغرام','انستا']),('TikTok',['tiktok','تيك توك','تيكتوك']),('Facebook',['facebook','فيسبوك','فيس بوك']),('YouTube',['youtube','يوتيوب']),('Telegram',['telegram','تيليجرام','تلجرام']),('WhatsApp',['whatsapp','واتساب','واتس']),('X / Twitter',['twitter','تويتر']),('Snapchat',['snapchat','سناب']),('Twitch',['twitch']),('LinkedIn',['linkedin','لينكد'])]
+ t=str(s).lower(); mp=[('Instagram',['instagram','انستجرام','انستغرام','انستقرام','انستا']),('TikTok',['tiktok','تيك توك','تيكتوك']),('Facebook',['facebook','فيسبوك','فيس بوك']),('YouTube',['youtube','يوتيوب']),('Telegram',['telegram','تيليجرام','تلجرام']),('WhatsApp',['whatsapp','واتساب','واتس']),('X / Twitter',['twitter','تويتر']),('Snapchat',['snapchat','سناب']),('Twitch',['twitch']),('LinkedIn',['linkedin','لينكد'])]
  for p,ws in mp:
   if any(w in t for w in ws): return p
  return 'أخرى'
